@@ -10,6 +10,8 @@ import { Bus } from "@opencode/core/bus"
 import { Location } from "@opencode/core/location"
 import { Model } from "@opencode/core/model"
 import { ModelsDev } from "@opencode/core/models-dev"
+import { Database } from "@opencode/core/database/database"
+import { sql } from "drizzle-orm"
 import { ModelsDevPlugin } from "@opencode/core/plugin/models-dev"
 import { Plugin } from "@opencode/core/plugin"
 import { PluginHost } from "@opencode/core/plugin/host"
@@ -34,6 +36,9 @@ const real = testEffect(PluginTestLayer)
 const isolated = testEffect(Layer.empty)
 const models = (file: string) =>
   AppNodeBuilder.build(ModelsDev.node, [ModelsDev.node.replace(ModelsDev.configured({ file, fetch: false }))])
+const catalogCache = AppNodeBuilder.build(ModelsDev.node, [
+  ModelsDev.node.replace(ModelsDev.configured({ fetch: false })),
+])
 
 function required<T>(value: T | undefined): T {
   if (value === undefined) throw new Error("Expected value")
@@ -1357,5 +1362,21 @@ describe("ModelsDevPlugin", () => {
         },
       ])
     }).pipe(Effect.provide(models(path.join(import.meta.dir, "fixtures", "models-dev-reasoning.json")))),
+  )
+})
+
+describe("ModelsDev catalog cache", () => {
+  real.effect("treats a malformed cached catalog row as a miss (#59272)", () =>
+    Effect.gen(function* () {
+      const db = (yield* Database.Service).db
+      const malformed = '{"a":"\\&"}'
+      const now = Date.now()
+      yield* db.run(
+        sql`insert into kv (key, value, time_created, time_updated) values ('models-dev:catalog', ${malformed}, ${now}, ${now})`,
+      )
+      const service = yield* ModelsDev.Service
+      const snapshots = yield* service.get()
+      expect(snapshots.length).toBeGreaterThan(0)
+    }).pipe(Effect.provide(catalogCache)),
   )
 })

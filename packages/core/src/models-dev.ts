@@ -360,8 +360,19 @@ export const layer = (options?: Options) =>
       const ttl = Duration.minutes(5)
       const lock = Semaphore.makeUnsafe(1)
 
+      const CORRUPT_ROW = Symbol("models-dev corrupt catalog row")
       const loadFromCache = Effect.fnUntraced(function* () {
-        const value = yield* kv.get(key)
+        // A corrupted catalog row breaks the KV column read itself, before the
+        // schema decode below can reject it; drop the row and report a miss so
+        // the bundled snapshot or the next fetch repopulates it (#59272).
+        const value = yield* kv.get(key).pipe(
+          Effect.catchDefect(() => Effect.succeed<Symbol>(CORRUPT_ROW)),
+        )
+        if (value === CORRUPT_ROW) {
+          yield* kv.remove(key)
+          yield* kv.remove(metaKey)
+          return
+        }
         const cached = Schema.decodeUnknownOption(Cache)(value)
         if (Option.isSome(cached))
           return {
